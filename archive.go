@@ -15,8 +15,14 @@ import (
 	"strings"
 )
 
+// SourcePaths names the filesystem paths to archive.
+type SourcePaths []string
+
+// DestDir names the directory an archive is extracted into.
+type DestDir string
+
 // Create writes a tar.gz archive of the given paths to w.
-func Create(w io.Writer, paths []string) error {
+func Create(w io.Writer, paths SourcePaths) error {
 	gw := gzip.NewWriter(w)
 	tw := tar.NewWriter(gw)
 
@@ -104,11 +110,11 @@ func copyAndClose(w io.Writer, r io.ReadCloser) error {
 	return closeErr
 }
 
-// Extract reads a tar.gz archive from r and extracts it into destDir.
+// Extract reads a tar.gz archive from r and extracts it into dest.
 // Returns the list of extracted paths.
-func Extract(r io.Reader, destDir string) ([]string, error) {
+func Extract(r io.Reader, dest DestDir) ([]string, error) {
 	return walkArchive(r, func(tr *tar.Reader, header *tar.Header) error {
-		return extractEntry(destDir, header, tr)
+		return extractEntry(string(dest), header, tr)
 	})
 }
 

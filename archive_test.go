@@ -212,7 +212,7 @@ func TestRoundTrip_SingleFile(t *testing.T) {
 
 	// Extract
 	destDir := t.TempDir()
-	extracted, err := Extract(&buf, destDir)
+	extracted, err := Extract(&buf, DestDir(destDir))
 	must.NoError(err)
 	want.NotEmpty(extracted)
 
@@ -239,7 +239,7 @@ func TestRoundTrip_DirectoryTree(t *testing.T) {
 
 	// Extract
 	destDir := t.TempDir()
-	extracted, err := Extract(&buf, destDir)
+	extracted, err := Extract(&buf, DestDir(destDir))
 	must.NoError(err)
 	want.GreaterOrEqual(len(extracted), 3) // dir + 2 files + subdir
 
@@ -277,7 +277,7 @@ func TestExtract_PathTraversal(t *testing.T) {
 		{name: "../escape.txt", typeflag: tar.TypeReg, mode: 0o644, body: "evil"},
 	})
 
-	_, err := Extract(bytes.NewReader(data), t.TempDir())
+	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -291,7 +291,7 @@ func TestExtract_DirEntry(t *testing.T) {
 	})
 
 	dest := t.TempDir()
-	extracted, err := Extract(bytes.NewReader(data), dest)
+	extracted, err := Extract(bytes.NewReader(data), DestDir(dest))
 	must.NoError(err)
 	want.Equal([]string{"subdir", "subdir/file.txt"}, extracted)
 
@@ -304,7 +304,7 @@ func TestExtract_NotGzip(t *testing.T) {
 	t.Parallel()
 	must := require.New(t)
 
-	_, err := Extract(bytes.NewReader([]byte("not gzip")), t.TempDir())
+	_, err := Extract(bytes.NewReader([]byte("not gzip")), DestDir(t.TempDir()))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -319,7 +319,7 @@ func TestExtract_CorruptTar(t *testing.T) {
 	must.NoError(err)
 	must.NoError(gw.Close())
 
-	_, err = Extract(bytes.NewReader(buf.Bytes()), t.TempDir())
+	_, err = Extract(bytes.NewReader(buf.Bytes()), DestDir(t.TempDir()))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -336,7 +336,7 @@ func TestExtract_OpenFileError(t *testing.T) {
 	dest := t.TempDir()
 	must.NoError(os.MkdirAll(filepath.Join(dest, "collision"), 0o755))
 
-	_, err := Extract(bytes.NewReader(data), dest)
+	_, err := Extract(bytes.NewReader(data), DestDir(dest))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -396,7 +396,7 @@ func TestExtract_DirMkdirError(t *testing.T) {
 	dest := t.TempDir()
 	must.NoError(os.WriteFile(filepath.Join(dest, "clash"), []byte("file"), 0o644))
 
-	_, err := Extract(bytes.NewReader(data), dest)
+	_, err := Extract(bytes.NewReader(data), DestDir(dest))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -413,7 +413,7 @@ func TestExtract_RegfileParentMkdirError(t *testing.T) {
 	dest := t.TempDir()
 	must.NoError(os.WriteFile(filepath.Join(dest, "parent"), []byte("file"), 0o644))
 
-	_, err := Extract(bytes.NewReader(data), dest)
+	_, err := Extract(bytes.NewReader(data), DestDir(dest))
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -443,9 +443,34 @@ func TestCreate_Symlink(t *testing.T) {
 	var buf bytes.Buffer
 	must.NoError(Create(&buf, []string{srcDir}))
 
-	entries, err := List(bytes.NewReader(buf.Bytes()))
-	must.NoError(err)
-	want.NotEmpty(entries)
+	// Walk the raw tar to locate the link entry and assert the symlink contract:
+	// buildHeader resolves the symlink to a TypeSymlink header (header.Name is
+	// the link's path) whose Linkname preserves the os.Readlink target.
+	hdr := findHeader(t, buf.Bytes(), link)
+	must.NotNil(hdr)
+	want.Equal(byte(tar.TypeSymlink), hdr.Typeflag)
+	want.Equal(target, hdr.Linkname)
+}
+
+// findHeader decompresses a tar.gz and returns the header whose Name equals
+// name, or nil if no such entry exists.
+func findHeader(t *testing.T, data []byte, name string) *tar.Header {
+	t.Helper()
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, gr.Close()) }()
+
+	tr := tar.NewReader(gr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		require.NoError(t, err)
+		if hdr.Name == name {
+			return hdr
+		}
+	}
 }
 
 func TestCreate_UnreadableFile(t *testing.T) {
