@@ -46,7 +46,6 @@ linters:
     gosec:
       excludes:
         - G115 # integer overflow conversion noise; rely on staticcheck/manual review
-        - G305 # archive zip-slip: extractEntry guards every entry with withinDir (see TestExtract_PathTraversal); gosec's heuristic flags the unavoidable filepath.Join regardless. REPO-LOCAL override — re-add after any tools.repository distribute-push that resets this file.
     revive:
       # revive's standalone binary only reads TOML; configuring it here (YAML)
       # via golangci-lint avoids a separate TOML config entirely.

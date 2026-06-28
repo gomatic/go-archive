@@ -40,11 +40,12 @@
 #   SUBMODULES <- nested go.mod dirs (excluding vendor/testdata/fixtures)
 # Override either on the command line for the rare repo that needs to.
 #
-# The canonical tool set lives in ONE place — the `tool (...)` stanza of
-# nicerobot/tools.build/go-tooling/go.mod — and is installed as real binaries into
-# $GOBIN (see the tools section below). Consumer repos carry NO tool stanza and
-# vendor NO tool dependencies; this Makefile resolves every tool from $(GOBIN)
-# only and fails loudly if it is missing.
+# The canonical tool set lives in ONE place — the pinned manifest
+# nicerobot/tools.build/go-tooling/tools.txt — and is installed as real binaries
+# into $GOBIN via `go install path@version` (see the tools section below).
+# Consumer repos carry NO tool stanza and vendor NO tool dependencies; this
+# Makefile resolves every tool from $(GOBIN) only and fails loudly if it is
+# missing.
 
 # A Self-Documenting Makefile: http://marmelab.com/blog/2016/02/29/auto-documented-makefile.html
 .DEFAULT_GOAL := test
@@ -223,9 +224,26 @@ vet: $(VET_SUBMODULES) ## Run go vet (root module + submodules)
 $(VET_SUBMODULES): vet@%:
 	go vet -C $* ./...
 
+# golangci-lint config resolution. A repo may ship a .golangci.override.yml
+# carrying ONLY its delta (e.g. one extra gosec exclude). When present, lint
+# deep-merges it OVER the distributed .golangci.yaml — scalars overridden, arrays
+# APPENDED (yq's `*+`) — into an effective config under the git-ignored $(COVERAGE_FOLDER)/
+# and lints against that. With no override, golangci-lint auto-discovers the
+# distributed .golangci.yaml exactly as before. This keeps the centralized config
+# managed/clobberable (distribute-build owns .golangci.yaml) while letting a
+# single repo EXTEND it without an in-tree edit the next distribute would erase.
+GOLANGCI_OVERRIDE  := $(wildcard .golangci.override.yml)
+GOLANGCI_EFFECTIVE := $(COVERAGE_FOLDER)/golangci.effective.yml
+
 .PHONY: lint
-lint: vet ## Run golangci-lint (incl. the central complexity linters)
+lint: vet ## Run golangci-lint (override-merged config if .golangci.override.yml present)
+ifeq ($(GOLANGCI_OVERRIDE),)
 	$(GOLANGCI_LINT) run
+else
+	@mkdir -p $(COVERAGE_FOLDER)
+	yq eval-all '. as $$item ireduce ({}; . *+ $$item)' .golangci.yaml $(GOLANGCI_OVERRIDE) > $(GOLANGCI_EFFECTIVE)
+	$(GOLANGCI_LINT) run --config $(GOLANGCI_EFFECTIVE)
+endif
 
 .PHONY: staticcheck
 staticcheck: ## Run staticcheck

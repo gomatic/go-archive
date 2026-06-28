@@ -1,0 +1,13 @@
+# Repo-local golangci-lint override — deep-merged OVER the distributed
+# .golangci.yaml by the shared Makefile's `lint` target (arrays appended). This
+# file is hand-authored and NOT managed by distribute-build, so it survives every
+# distribution. Keep it to the minimal delta this repo needs.
+linters:
+  settings:
+    gosec:
+      excludes:
+        # G305 (zip-slip / archive path traversal): extractEntry guards every
+        # entry with withinDir before any filepath.Join (see TestExtract_PathTraversal);
+        # gosec's heuristic flags the unavoidable Join regardless. Justified, narrow,
+        # and exercised by a dedicated traversal test.
+        - G305
