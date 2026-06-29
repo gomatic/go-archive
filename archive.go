@@ -161,7 +161,7 @@ func walkEntries(tr *tar.Reader, handle entryFunc) ([]string, error) {
 func extractEntry(destDir string, header *tar.Header, tr *tar.Reader) error {
 	target := filepath.Join(destDir, header.Name)
 	if !withinDir(target, destDir) {
-		return ErrExtract.Wrap(nil, "path traversal: "+header.Name)
+		return ErrPathTraversal.Wrap(nil, header.Name)
 	}
 
 	switch header.Typeflag {
@@ -171,6 +171,24 @@ func extractEntry(destDir string, header *tar.Header, tr *tar.Reader) error {
 		}
 	case tar.TypeReg:
 		return extractFile(target, header, tr)
+	case tar.TypeSymlink:
+		return extractSymlink(destDir, target, header.Linkname)
+	}
+	return nil
+}
+
+// extractSymlink creates a symlink, rejecting one whose resolved target escapes
+// destDir (an absolute or ..-bearing Linkname is a traversal vector).
+func extractSymlink(destDir, target, linkname string) error {
+	resolved := linkname
+	if !filepath.IsAbs(linkname) {
+		resolved = filepath.Join(filepath.Dir(target), linkname)
+	}
+	if !withinDir(resolved, destDir) {
+		return ErrPathTraversal.Wrap(nil, "symlink target: "+linkname)
+	}
+	if err := os.Symlink(linkname, target); err != nil {
+		return ErrExtract.Wrap(err)
 	}
 	return nil
 }
@@ -182,18 +200,31 @@ func withinDir(target, destDir string) bool {
 	return clean == root || strings.HasPrefix(clean, root+string(os.PathSeparator))
 }
 
+// extractWriter opens the destination for an extracted regular file. It is a
+// seam so the close contract is assertable under test.
+var extractWriter = osExtractWriter
+
+func osExtractWriter(name string, perm os.FileMode) (io.WriteCloser, error) {
+	return os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+}
+
 func extractFile(target string, header *tar.Header, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return ErrExtract.Wrap(err)
 	}
-
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+	w, err := extractWriter(target, os.FileMode(header.Mode))
 	if err != nil {
 		return ErrExtract.Wrap(err)
 	}
-
-	if err := copyAndClose(f, io.NopCloser(r)); err != nil {
-		return ErrExtract.Wrap(err)
+	// Copy then always close the destination — the previous copyAndClose(f,
+	// io.NopCloser(r)) closed the no-op wrapper and leaked every file's handle.
+	_, copyErr := io.Copy(w, r)
+	closeErr := w.Close()
+	if copyErr != nil {
+		return ErrExtract.Wrap(copyErr)
+	}
+	if closeErr != nil {
+		return ErrExtract.Wrap(closeErr)
 	}
 	return nil
 }

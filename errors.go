@@ -37,4 +37,8 @@ const (
 	// ErrExtract is the leading sentinel wrapped when a tar.gz archive cannot be
 	// read, listed, or extracted.
 	ErrExtract Error = "failed to extract"
+	// ErrPathTraversal is the sentinel for a malicious archive entry whose path or
+	// symlink target escapes the destination directory. It is distinct from
+	// ErrExtract so callers can tell a hostile archive from an I/O fault.
+	ErrPathTraversal Error = "archive entry escapes destination"
 )

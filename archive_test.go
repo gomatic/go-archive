@@ -19,6 +19,7 @@ import (
 type tarEntry struct {
 	name     string
 	body     string
+	linkname string
 	mode     int64
 	typeflag byte
 }
@@ -31,7 +32,7 @@ func buildTarGz(t *testing.T, entries []tarEntry) []byte {
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 	for _, e := range entries {
-		hdr := &tar.Header{Name: e.name, Typeflag: e.typeflag, Mode: e.mode, Size: int64(len(e.body))}
+		hdr := &tar.Header{Name: e.name, Typeflag: e.typeflag, Mode: e.mode, Size: int64(len(e.body)), Linkname: e.linkname}
 		require.NoError(t, tw.WriteHeader(hdr))
 		if e.body != "" {
 			_, err := tw.Write([]byte(e.body))
@@ -273,12 +274,13 @@ func TestExtract_PathTraversal(t *testing.T) {
 	t.Parallel()
 	must := require.New(t)
 
-	data := buildTarGz(t, []tarEntry{
-		{name: "../escape.txt", typeflag: tar.TypeReg, mode: 0o644, body: "evil"},
-	})
-
-	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
-	must.ErrorIs(err, ErrExtract)
+	for _, name := range []string{"../escape.txt", "a/../../escape.txt"} {
+		data := buildTarGz(t, []tarEntry{
+			{name: name, typeflag: tar.TypeReg, mode: 0o644, body: "evil"},
+		})
+		_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
+		must.ErrorIs(err, ErrPathTraversal, "entry %q must be rejected as traversal", name)
+	}
 }
 
 func TestExtract_DirEntry(t *testing.T) {
@@ -500,4 +502,103 @@ func TestCreate_EmptyPaths(t *testing.T) {
 	entries, err := List(&buf)
 	must.NoError(err)
 	must.Empty(entries)
+}
+
+// recordCloser is an injected extract writer whose Write or Close fails, so the
+// close contract and copy-error path of extractFile are assertable.
+type recordCloser struct {
+	writeErr error
+	closeErr error
+	closed   bool
+}
+
+func (c *recordCloser) Write(p []byte) (int, error) {
+	if c.writeErr != nil {
+		return 0, c.writeErr
+	}
+	return len(p), nil
+}
+
+func (c *recordCloser) Close() error {
+	c.closed = true
+	return c.closeErr
+}
+
+func swapExtractWriter(t *testing.T, w *recordCloser) {
+	t.Helper()
+	original := extractWriter
+	t.Cleanup(func() { extractWriter = original })
+	extractWriter = func(string, os.FileMode) (io.WriteCloser, error) { return w, nil }
+}
+
+func TestExtract_ClosesDestinationAndSurfacesCloseError(t *testing.T) {
+	// Not parallel: swaps the package-level extractWriter seam.
+	must := require.New(t)
+	w := &recordCloser{closeErr: errBoom}
+	swapExtractWriter(t, w)
+
+	data := buildTarGz(t, []tarEntry{{name: "f.txt", typeflag: tar.TypeReg, mode: 0o644, body: "x"}})
+	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
+
+	must.ErrorIs(err, ErrExtract)
+	must.True(w.closed, "extractFile must close the destination file")
+}
+
+func TestExtract_SurfacesWriteError(t *testing.T) {
+	// Not parallel: swaps the package-level extractWriter seam.
+	must := require.New(t)
+	swapExtractWriter(t, &recordCloser{writeErr: errBoom})
+
+	data := buildTarGz(t, []tarEntry{{name: "f.txt", typeflag: tar.TypeReg, mode: 0o644, body: "x"}})
+	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
+
+	must.ErrorIs(err, ErrExtract)
+}
+
+func TestExtract_SafeSymlinkIsCreated(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require privilege on windows")
+	}
+	want, must := assert.New(t), require.New(t)
+	dest := t.TempDir()
+
+	data := buildTarGz(t, []tarEntry{
+		{name: "target.txt", typeflag: tar.TypeReg, mode: 0o644, body: "data"},
+		{name: "link.txt", typeflag: tar.TypeSymlink, linkname: "target.txt"},
+	})
+	names, err := Extract(bytes.NewReader(data), DestDir(dest))
+
+	must.NoError(err)
+	want.Contains(names, "link.txt")
+	got, err := os.Readlink(filepath.Join(dest, "link.txt"))
+	must.NoError(err)
+	want.Equal("target.txt", got)
+}
+
+func TestExtract_EscapingSymlinkIsRejected(t *testing.T) {
+	t.Parallel()
+	must := require.New(t)
+
+	for _, link := range []string{"../../etc/passwd", "/etc/passwd"} {
+		data := buildTarGz(t, []tarEntry{
+			{name: "link.txt", typeflag: tar.TypeSymlink, linkname: link},
+		})
+		_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
+		must.ErrorIs(err, ErrPathTraversal, "symlink target %q must be rejected", link)
+	}
+}
+
+func TestExtract_SymlinkCreationError(t *testing.T) {
+	t.Parallel()
+	must := require.New(t)
+
+	// A regular file already occupies the symlink's path, so os.Symlink fails.
+	data := buildTarGz(t, []tarEntry{
+		{name: "link.txt", typeflag: tar.TypeReg, mode: 0o644, body: "file"},
+		{name: "link.txt", typeflag: tar.TypeSymlink, linkname: "target.txt"},
+	})
+
+	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
+	must.ErrorIs(err, ErrExtract)
 }
