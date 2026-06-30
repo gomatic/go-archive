@@ -26,7 +26,7 @@ type tarEntry struct {
 
 // buildTarGz produces a gzip-compressed tar stream from the given entries,
 // letting tests drive Extract/List down branches that os.Create cannot reach.
-func buildTarGz(t *testing.T, entries []tarEntry) []byte {
+func buildTarGz(t testing.TB, entries []tarEntry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
@@ -120,7 +120,7 @@ func TestCloseWriters_TarCloseError(t *testing.T) {
 	gw := gzip.NewWriter(&budgetWriter{budget: 0})
 	tw := tar.NewWriter(gw)
 
-	must.ErrorIs(closeWriters(tw, gw), ErrCreateArchive)
+	must.ErrorIs(creator{tw: tw, gw: gw}.close(), ErrCreateArchive)
 }
 
 func TestCloseWriters_GzipCloseError(t *testing.T) {
@@ -133,7 +133,7 @@ func TestCloseWriters_GzipCloseError(t *testing.T) {
 	tw := tar.NewWriter(gw)
 
 	must.NoError(tw.Close())
-	must.ErrorIs(closeWriters(tw, gw), ErrCreateArchive)
+	must.ErrorIs(creator{tw: tw, gw: gw}.close(), ErrCreateArchive)
 }
 
 // fakeInfo is a synthetic os.FileInfo letting tests drive buildHeader down its
@@ -158,7 +158,7 @@ func TestBuildHeader_ReadlinkError(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "not-a-link")
 	must.NoError(os.WriteFile(file, []byte("x"), 0o644))
 
-	_, err := buildHeader(file, fakeInfo{name: "not-a-link", mode: os.ModeSymlink})
+	_, err := buildHeader(filePath(file), fakeInfo{name: "not-a-link", mode: os.ModeSymlink})
 	must.Error(err)
 }
 
@@ -177,7 +177,7 @@ func TestWriteEntry_BuildHeaderError(t *testing.T) {
 
 	// A socket mode makes buildHeader fail before any write.
 	tw := tar.NewWriter(&bytes.Buffer{})
-	must.Error(writeEntry(tw, "sock", fakeInfo{name: "sock", mode: os.ModeSocket}))
+	must.Error(creator{tw: tw}.writeEntry("sock", fakeInfo{name: "sock", mode: os.ModeSocket}))
 }
 
 func TestWriteEntry_WriteHeaderError(t *testing.T) {
@@ -191,7 +191,7 @@ func TestWriteEntry_WriteHeaderError(t *testing.T) {
 
 	// tar writes the header straight to the failing writer (no gzip buffering).
 	tw := tar.NewWriter(failWriter{})
-	must.ErrorIs(writeEntry(tw, file, info), errBoom)
+	must.ErrorIs(creator{tw: tw}.writeEntry(filePath(file), info), errBoom)
 }
 
 func TestExtractFile_CopyError(t *testing.T) {
@@ -199,9 +199,9 @@ func TestExtractFile_CopyError(t *testing.T) {
 	must := require.New(t)
 
 	target := filepath.Join(t.TempDir(), "out.txt")
-	hdr := &tar.Header{Name: "out.txt", Mode: 0o644}
+	hdr := tar.Header{Name: "out.txt", Mode: 0o644}
 
-	err := extractFile(target, hdr, failReadCloser{})
+	err := extractFile(filePath(target), hdr, failReadCloser{})
 	must.ErrorIs(err, ErrExtract)
 }
 
@@ -534,7 +534,7 @@ func swapExtractWriter(t *testing.T, w *recordCloser) {
 	t.Helper()
 	original := extractWriter
 	t.Cleanup(func() { extractWriter = original })
-	extractWriter = func(string, os.FileMode) (io.WriteCloser, error) { return w, nil }
+	extractWriter = func(filePath, os.FileMode) (io.WriteCloser, error) { return w, nil }
 }
 
 func TestExtract_ClosesDestinationAndSurfacesCloseError(t *testing.T) {

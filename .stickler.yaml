@@ -1,0 +1,20 @@
+# Per-repo stickler overlay (deep-merged onto the distributed .golangci.yaml).
+#
+# This is the sanctioned home for go-archive's one local divergence: the shared
+# .golangci.yaml is owned by nicerobot/tools.repository and is reset on every
+# distribute push, so an exclude added there does not survive. An overlay here
+# does, because stickler merges it after loading the base config.
+#
+# G305 (gosec "file traversal when extracting") is a false positive in this
+# package: extractEntry guards every entry — and every symlink target — with
+# withinDir before any filesystem write (asserted by TestExtract_PathTraversal
+# and TestExtract_EscapingSymlinkIsRejected). gosec flags the unavoidable
+# filepath.Join(dest, header.Name) regardless of the guard it cannot see.
+config:
+  golangci-lint:
+    linters:
+      settings:
+        gosec:
+          excludes:
+            add:
+              - G305
