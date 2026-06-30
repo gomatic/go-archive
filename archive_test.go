@@ -32,7 +32,13 @@ func buildTarGz(t *testing.T, entries []tarEntry) []byte {
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
 	for _, e := range entries {
-		hdr := &tar.Header{Name: e.name, Typeflag: e.typeflag, Mode: e.mode, Size: int64(len(e.body)), Linkname: e.linkname}
+		hdr := &tar.Header{
+			Name:     e.name,
+			Typeflag: e.typeflag,
+			Mode:     e.mode,
+			Size:     int64(len(e.body)),
+			Linkname: e.linkname,
+		}
 		require.NoError(t, tw.WriteHeader(hdr))
 		if e.body != "" {
 			_, err := tw.Write([]byte(e.body))
