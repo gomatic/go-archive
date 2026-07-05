@@ -44,7 +44,7 @@ func Create(w io.Writer, paths SourcePaths) error {
 
 	for _, p := range paths {
 		if err := c.addPath(filePath(p)); err != nil {
-			return ErrCreateArchive.Wrap(err, p)
+			return ErrCreateArchive.With(err, p)
 		}
 	}
 
@@ -54,10 +54,10 @@ func Create(w io.Writer, paths SourcePaths) error {
 // close flushes the tar then gzip writers, reporting the first failure.
 func (c creator) close() error {
 	if err := c.tw.Close(); err != nil {
-		return ErrCreateArchive.Wrap(err)
+		return ErrCreateArchive.With(err)
 	}
 	if err := c.gw.Close(); err != nil {
-		return ErrCreateArchive.Wrap(err)
+		return ErrCreateArchive.With(err)
 	}
 	return nil
 }
@@ -171,7 +171,7 @@ func noopEntry(tar.Header) error { return nil }
 func newExtractor(r io.Reader) (extractor, func(), error) {
 	gr, err := gzip.NewReader(r)
 	if err != nil {
-		return extractor{}, nil, ErrExtract.Wrap(err)
+		return extractor{}, nil, ErrExtract.With(err)
 	}
 	return extractor{tr: tar.NewReader(gr)}, func() { _ = gr.Close() }, nil
 }
@@ -186,7 +186,7 @@ func (e extractor) walk(handle entryAction) ([]string, error) {
 			return names, nil
 		}
 		if err != nil {
-			return nil, ErrExtract.Wrap(err)
+			return nil, ErrExtract.With(err)
 		}
 		if err := handle(*header); err != nil {
 			return nil, err
@@ -200,13 +200,13 @@ func (e extractor) walk(handle entryAction) ([]string, error) {
 func extractEntry(dest DestDir, header tar.Header, r io.Reader) error {
 	target := filePath(filepath.Join(string(dest), header.Name))
 	if !withinDir(target, dest) {
-		return ErrPathTraversal.Wrap(nil, header.Name)
+		return ErrPathTraversal.With(nil, header.Name)
 	}
 
 	switch header.Typeflag {
 	case tar.TypeDir:
 		if err := os.MkdirAll(string(target), os.FileMode(header.Mode)); err != nil {
-			return ErrExtract.Wrap(err)
+			return ErrExtract.With(err)
 		}
 	case tar.TypeReg:
 		return extractFile(target, header, r)
@@ -224,10 +224,10 @@ func extractSymlink(dest DestDir, target filePath, link linkName) error {
 		resolved = filepath.Join(filepath.Dir(string(target)), string(link))
 	}
 	if !withinDir(filePath(resolved), dest) {
-		return ErrPathTraversal.Wrap(nil, "symlink target: "+string(link))
+		return ErrPathTraversal.With(nil, "symlink target: "+string(link))
 	}
 	if err := os.Symlink(string(link), string(target)); err != nil {
-		return ErrExtract.Wrap(err)
+		return ErrExtract.With(err)
 	}
 	return nil
 }
@@ -251,21 +251,21 @@ func osExtractWriter(name filePath, perm os.FileMode) (io.WriteCloser, error) {
 // directories and always closing the destination.
 func extractFile(target filePath, header tar.Header, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(string(target)), 0o755); err != nil {
-		return ErrExtract.Wrap(err)
+		return ErrExtract.With(err)
 	}
 	w, err := extractWriter(target, os.FileMode(header.Mode))
 	if err != nil {
-		return ErrExtract.Wrap(err)
+		return ErrExtract.With(err)
 	}
 	// Copy then always close the destination — closing a no-op wrapper instead
 	// would leak every extracted file's handle.
 	_, copyErr := io.Copy(w, r)
 	closeErr := w.Close()
 	if copyErr != nil {
-		return ErrExtract.Wrap(copyErr)
+		return ErrExtract.With(copyErr)
 	}
 	if closeErr != nil {
-		return ErrExtract.Wrap(closeErr)
+		return ErrExtract.With(closeErr)
 	}
 	return nil
 }
