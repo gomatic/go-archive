@@ -308,12 +308,18 @@ func TestExtract_DirEntry(t *testing.T) {
 	want.Equal("hi", string(body))
 }
 
-func TestExtract_NotGzip(t *testing.T) {
+// TestErrExtractWrapsAnUnreadableArchive names ErrExtract's claim on the first
+// of the three failures it speaks for — an archive that cannot be READ. A
+// non-gzip stream must surface ErrExtract and not the traversal sentinel: the
+// distinction between an I/O fault and a hostile archive is the whole reason
+// ErrPathTraversal is separate.
+func TestErrExtractWrapsAnUnreadableArchive(t *testing.T) {
 	t.Parallel()
 	must := require.New(t)
 
 	_, err := Extract(bytes.NewReader([]byte("not gzip")), DestDir(t.TempDir()))
 	must.ErrorIs(err, ErrExtract)
+	must.NotErrorIs(err, ErrPathTraversal)
 }
 
 func TestExtract_CorruptTar(t *testing.T) {
@@ -370,13 +376,19 @@ func TestList_CorruptTar(t *testing.T) {
 	must.ErrorIs(err, ErrExtract)
 }
 
-func TestCreate_WriterError(t *testing.T) {
+// TestErrCreateArchiveWrapsAFailedWrite names ErrCreateArchive's claim: an
+// archive that cannot be created surfaces that sentinel, never a bare stdlib
+// error, so a caller can tell an archiving failure from any other error with
+// errors.Is. The underlying cause stays recoverable in the same chain.
+func TestErrCreateArchiveWrapsAFailedWrite(t *testing.T) {
 	t.Parallel()
 	must := require.New(t)
 
 	// Empty paths still flush the tar/gzip footers, which the failing writer rejects.
 	err := Create(failWriter{}, []string{})
 	must.ErrorIs(err, ErrCreateArchive)
+	must.ErrorIs(err, errBoom)
+	must.NotErrorIs(err, ErrExtract)
 }
 
 func TestCreate_WriteHeaderError(t *testing.T) {

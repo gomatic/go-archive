@@ -2,8 +2,9 @@
 // Create writes a gzip-compressed tar of filesystem paths to an io.Writer;
 // Extract reads one from an io.Reader into a destination directory, guarding
 // against path-traversal ("zip-slip"); List reports an archive's entry names
-// without writing anything. Every failure carries a sentinel ([ErrCreateArchive]
-// or [ErrExtract]) recoverable with errors.Is.
+// without writing anything. Every failure carries a sentinel recoverable with
+// errors.Is: [ErrCreateArchive], [ErrExtract], or — for an entry or symlink
+// target that escapes dest — [ErrPathTraversal].
 package archive
 
 import (
