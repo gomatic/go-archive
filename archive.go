@@ -91,12 +91,21 @@ func (c creator) writeEntry(path filePath, info os.FileInfo) error {
 
 // copyFile opens path and copies its contents into the archive.
 func (c creator) copyFile(path filePath) error {
-	f, err := os.Open(string(path))
+	f, err := openFile(string(path))
 	if err != nil {
 		return err
 	}
 	return copyAndClose(c.tw, f)
 }
+
+// openFile is the read seam for a file being archived.
+//
+// It exists because the only OS-level way to make a real open fail is an
+// unreadable file, and permission bits do not bind uid 0 — CI runs as root, so
+// the test covering this branch skipped there and the branch went uncovered on
+// the one platform that gates. A permission bit is not a failure injection when
+// the caller can ignore permissions.
+var openFile = os.Open
 
 // buildHeader constructs a tar header for path, resolving symlink targets.
 func buildHeader(path filePath, info os.FileInfo) (tar.Header, error) {

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -619,4 +620,31 @@ func TestExtract_SymlinkCreationError(t *testing.T) {
 
 	_, err := Extract(bytes.NewReader(data), DestDir(t.TempDir()))
 	must.ErrorIs(err, ErrExtract)
+}
+
+// TestCopyFileSurfacesAnUnopenableSource covers copyFile's open-error branch on
+// every platform and every uid.
+//
+// TestCreate_UnreadableFile covers the same branch through a real 0o000 file,
+// but skips as root — which is exactly how CI runs, so that branch was
+// uncovered precisely where the coverage gate is enforced. This drives it
+// through the seam instead, so the contract holds regardless of who runs it.
+// The seam is process-global, so this test does not run in parallel.
+func TestCopyFileSurfacesAnUnopenableSource(t *testing.T) {
+	must := require.New(t)
+
+	srcDir := t.TempDir()
+	file := filepath.Join(srcDir, "present.txt")
+	must.NoError(os.WriteFile(file, []byte("content"), 0o600))
+
+	sentinel := errors.New("cannot open")
+	prev := openFile
+	openFile = func(string) (*os.File, error) { return nil, sentinel }
+	t.Cleanup(func() { openFile = prev })
+
+	var buf bytes.Buffer
+	err := Create(&buf, []string{file})
+
+	must.ErrorIs(err, ErrCreateArchive, "an unopenable source fails the archive")
+	must.ErrorIs(err, sentinel, "and carries the reason")
 }
